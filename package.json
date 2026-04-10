@@ -1,0 +1,52 @@
+{
+  "name": "@isteam/twitter-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Twitter/X marketing — search tweets, post, reply, and engage via AI agents",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "twitter-mcp": "./bin/twitter-mcp.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "twitter",
+    "x",
+    "social-media",
+    "marketing",
+    "ai",
+    "llm",
+    "claude",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isteamhq/twitter-mcp.git"
+  },
+  "homepage": "https://is.team",
+  "bugs": {
+    "url": "https://github.com/isteamhq/twitter-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ]
+}
