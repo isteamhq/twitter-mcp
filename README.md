@@ -76,6 +76,23 @@ Add to your MCP config (`.mcp.json` for Claude Code, or Claude Desktop settings)
 4. Generate your access token and secret from the "Keys and tokens" tab
 5. Copy all four values into your MCP config
 
+## Rate Limits & Agent Safety
+
+Twitter API v2 enforces per-endpoint rate limits in 15-minute windows:
+
+| Endpoint | Limit | Notes |
+|----------|-------|-------|
+| `POST /2/tweets` (post, reply, quote) | 300 / 15 min | ~20/min |
+| `GET /2/tweets/search/recent` | 450 / 15 min | Requires Basic tier |
+| `POST /2/users/:id/likes` | 300 / 15 min | |
+| `POST /2/users/:id/retweets` | 300 / 15 min | |
+| `POST /2/users/:id/following` | 300 / 15 min | |
+| `GET /2/users/:id/mentions` | 450 / 15 min | |
+
+**Idempotency note:** Twitter API does not deduplicate identical tweets — posting the same text twice creates two tweets. If your agent retries on timeout, it may create duplicates. Use `get_user_tweets` to verify before retrying a post.
+
+**Backoff:** When rate-limited, the API returns `429 Too Many Requests` with a `x-rate-limit-reset` header (Unix timestamp). Wait until that time before retrying.
+
 ## Usage Examples
 
 **Monitor your brand:**
