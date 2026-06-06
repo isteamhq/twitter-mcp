@@ -1,6 +1,9 @@
 import { buildOAuth1Header } from "./oauth.js";
 
 const API_BASE = "https://api.twitter.com/2";
+const DEFAULT_XQUIK_BASE = "https://xquik.com";
+const XQUIK_SEARCH_PATH = "/api/v1/x/tweets/search";
+const XQUIK_USER_SEARCH_PATH = "/api/v1/x/users/search";
 
 interface TwitterCredentials {
   apiKey: string;
@@ -9,7 +12,12 @@ interface TwitterCredentials {
   accessTokenSecret: string;
 }
 
-interface TweetData {
+interface XquikConfig {
+  baseUrl: string;
+  apiKey: string;
+}
+
+export interface TweetData {
   id: string;
   text: string;
   author_id?: string;
@@ -24,7 +32,7 @@ interface TweetData {
   conversation_id?: string;
 }
 
-interface UserData {
+export interface UserData {
   id: string;
   name: string;
   username: string;
@@ -43,21 +51,42 @@ export interface SearchResult {
 }
 
 export class TwitterClient {
-  private creds: TwitterCredentials;
+  private creds?: TwitterCredentials;
+  private xquik?: XquikConfig;
+  private xquikUsernamesById = new Map<string, string>();
 
   constructor() {
     const apiKey = process.env.TWITTER_API_KEY;
     const apiSecret = process.env.TWITTER_API_SECRET;
     const accessToken = process.env.TWITTER_ACCESS_TOKEN;
     const accessTokenSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET;
+    const xquikApiKey = process.env.XQUIK_API_KEY ?? process.env.HERMES_TWEET_API_KEY;
 
-    if (!apiKey || !apiSecret || !accessToken || !accessTokenSecret) {
-      throw new Error(
-        "Missing Twitter credentials. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET",
-      );
+    if (xquikApiKey) {
+      this.xquik = {
+        apiKey: xquikApiKey,
+        baseUrl: process.env.XQUIK_BASE_URL ?? DEFAULT_XQUIK_BASE,
+      };
     }
 
-    this.creds = { apiKey, apiSecret, accessToken, accessTokenSecret };
+    if (apiKey && apiSecret && accessToken && accessTokenSecret) {
+      this.creds = { apiKey, apiSecret, accessToken, accessTokenSecret };
+    }
+
+    if (!this.creds && !this.xquik) {
+      throw new Error(
+        "Missing credentials. Set Twitter OAuth variables or XQUIK_API_KEY/HERMES_TWEET_API_KEY for read-only tools.",
+      );
+    }
+  }
+
+  private ensureTwitterCredentials(): TwitterCredentials {
+    if (!this.creds) {
+      throw new Error(
+        "Twitter OAuth credentials are required for this tool. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET.",
+      );
+    }
+    return this.creds;
   }
 
   // ─── GET requests ───────────────────────────────────────────────
@@ -72,13 +101,14 @@ export class TwitterClient {
 
     // OAuth needs the base URL without query string, but query params in signature
     const baseUrl = `${API_BASE}${path}`;
+    const creds = this.ensureTwitterCredentials();
     const oauthHeader = buildOAuth1Header(
       "GET",
       baseUrl,
-      this.creds.apiKey,
-      this.creds.apiSecret,
-      this.creds.accessToken,
-      this.creds.accessTokenSecret,
+      creds.apiKey,
+      creds.apiSecret,
+      creds.accessToken,
+      creds.accessTokenSecret,
       params,
     );
 
@@ -99,13 +129,14 @@ export class TwitterClient {
 
   private async post(path: string, body: Record<string, unknown>): Promise<unknown> {
     const url = `${API_BASE}${path}`;
+    const creds = this.ensureTwitterCredentials();
     const oauthHeader = buildOAuth1Header(
       "POST",
       url,
-      this.creds.apiKey,
-      this.creds.apiSecret,
-      this.creds.accessToken,
-      this.creds.accessTokenSecret,
+      creds.apiKey,
+      creds.apiSecret,
+      creds.accessToken,
+      creds.accessTokenSecret,
     );
 
     const res = await fetch(url, {
@@ -129,13 +160,14 @@ export class TwitterClient {
 
   private async delete(path: string): Promise<unknown> {
     const url = `${API_BASE}${path}`;
+    const creds = this.ensureTwitterCredentials();
     const oauthHeader = buildOAuth1Header(
       "DELETE",
       url,
-      this.creds.apiKey,
-      this.creds.apiSecret,
-      this.creds.accessToken,
-      this.creds.accessTokenSecret,
+      creds.apiKey,
+      creds.apiSecret,
+      creds.accessToken,
+      creds.accessTokenSecret,
     );
 
     const res = await fetch(url, {
@@ -149,6 +181,148 @@ export class TwitterClient {
     }
 
     return res.json();
+  }
+
+  private async getXquik(path: string, params: Record<string, string>): Promise<unknown> {
+    if (!this.xquik) {
+      throw new Error("Xquik is not configured.");
+    }
+
+    const url = new URL(`${this.xquik.baseUrl.replace(/\/$/, "")}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${this.xquik.apiKey}`,
+        "X-API-Key": this.xquik.apiKey,
+      },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Xquik API ${res.status}: ${text}`);
+    }
+
+    return res.json();
+  }
+
+  private readString(value: unknown, keys: string[]): string | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const record = value as Record<string, unknown>;
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.length > 0) return candidate;
+      if (typeof candidate === "number" || typeof candidate === "bigint") return String(candidate);
+    }
+    for (const child of Object.values(record)) {
+      const nested = this.readString(child, keys);
+      if (nested) return nested;
+    }
+    return undefined;
+  }
+
+  private readNumber(value: unknown, keys: string[]): number {
+    const raw = this.readString(value, keys);
+    if (!raw) return 0;
+    const numeric = Number(raw.replaceAll(",", ""));
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  private readList(value: unknown, keys: string[]): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== "object") return [];
+    const record = value as Record<string, unknown>;
+    for (const key of keys) {
+      const candidate = record[key];
+      if (Array.isArray(candidate)) return candidate;
+      const nested = this.readList(candidate, keys);
+      if (nested.length > 0) return nested;
+    }
+    return [];
+  }
+
+  private readNextToken(value: unknown): string | undefined {
+    return this.readString(value, ["next_token", "nextToken", "next_cursor", "nextCursor", "cursor"]);
+  }
+
+  private normalizeXquikTweet(raw: unknown, fallbackUsername?: string): TweetData {
+    const id = this.readString(raw, ["id", "tweet_id", "tweetId", "rest_id"]) ?? "";
+    const username = this.readString(raw, ["username", "screen_name", "screenName", "handle"]) ?? fallbackUsername;
+    const authorId = this.readString(raw, ["author_id", "authorId", "user_id", "userId"]) ?? username ?? "xquik";
+    if (username) {
+      this.xquikUsernamesById.set(authorId, username.replace(/^@/, ""));
+    }
+
+    return {
+      id,
+      text: this.readString(raw, ["text", "full_text", "fullText", "content"]) ?? "",
+      author_id: authorId,
+      created_at: this.readString(raw, ["created_at", "createdAt", "time", "date", "timestamp"]),
+      public_metrics: {
+        retweet_count: this.readNumber(raw, ["retweet_count", "retweetCount", "retweets"]),
+        reply_count: this.readNumber(raw, ["reply_count", "replyCount", "replies"]),
+        like_count: this.readNumber(raw, ["like_count", "likeCount", "likes"]),
+        quote_count: this.readNumber(raw, ["quote_count", "quoteCount", "quotes"]),
+        impression_count: this.readNumber(raw, ["impression_count", "impressionCount", "views", "view_count", "viewCount"]),
+      },
+      conversation_id: this.readString(raw, ["conversation_id", "conversationId"]),
+    };
+  }
+
+  private normalizeXquikUser(raw: unknown): UserData {
+    const username = (this.readString(raw, ["username", "screen_name", "screenName", "handle"]) ?? "").replace(/^@/, "");
+    const id = this.readString(raw, ["id", "user_id", "userId", "rest_id"]) ?? username;
+    if (id && username) {
+      this.xquikUsernamesById.set(id, username);
+    }
+
+    return {
+      id,
+      name: this.readString(raw, ["name", "display_name", "displayName"]) ?? username,
+      username,
+      description: this.readString(raw, ["description", "bio"]),
+      public_metrics: {
+        followers_count: this.readNumber(raw, ["followers_count", "followersCount", "followers"]),
+        following_count: this.readNumber(raw, ["following_count", "followingCount", "following"]),
+        tweet_count: this.readNumber(raw, ["tweet_count", "tweetCount", "tweets", "statuses_count", "statusesCount"]),
+      },
+    };
+  }
+
+  private async searchXquikTweets(query: string, maxResults = 10, nextToken?: string): Promise<SearchResult> {
+    const params: Record<string, string> = {
+      q: query,
+      limit: Math.min(Math.max(maxResults, 1), 100).toString(),
+    };
+    if (nextToken) params.cursor = nextToken;
+
+    const data = await this.getXquik(XQUIK_SEARCH_PATH, params);
+    const tweets = this.readList(data, ["tweets", "data", "items", "results"]).map((tweet) =>
+      this.normalizeXquikTweet(tweet),
+    );
+
+    const users: Record<string, UserData> = {};
+    for (const tweet of tweets) {
+      if (!tweet.author_id) continue;
+      const username = this.xquikUsernamesById.get(tweet.author_id);
+      if (!username) continue;
+      users[tweet.author_id] = {
+        id: tweet.author_id,
+        name: username,
+        username,
+        public_metrics: {
+          followers_count: 0,
+          following_count: 0,
+          tweet_count: 0,
+        },
+      };
+    }
+
+    return { tweets, users, nextToken: this.readNextToken(data) };
   }
 
   // ─── Public methods ─────────────────────────────────────────────
@@ -223,6 +397,10 @@ export class TwitterClient {
 
   /** Search recent tweets (requires Basic tier — $200/mo) */
   async searchTweets(query: string, maxResults = 10, nextToken?: string): Promise<SearchResult> {
+    if (this.xquik) {
+      return this.searchXquikTweets(query, maxResults, nextToken);
+    }
+
     const params: Record<string, string> = {
       query,
       max_results: Math.min(Math.max(maxResults, 10), 100).toString(),
@@ -252,6 +430,15 @@ export class TwitterClient {
 
   /** Get user's recent tweets */
   async getUserTweets(userId: string, maxResults = 10): Promise<TweetData[]> {
+    if (this.xquik) {
+      const username = this.xquikUsernamesById.get(userId);
+      if (!username) {
+        throw new Error("Call get_user first when using the Xquik read backend.");
+      }
+      const result = await this.searchXquikTweets(`from:${username} -filter:replies`, maxResults);
+      return result.tweets;
+    }
+
     const data = (await this.get(`/users/${userId}/tweets`, {
       max_results: Math.min(Math.max(maxResults, 5), 100).toString(),
       "tweet.fields": "created_at,public_metrics,conversation_id",
@@ -283,6 +470,19 @@ export class TwitterClient {
 
   /** Lookup user by username */
   async getUserByUsername(username: string): Promise<UserData> {
+    if (this.xquik) {
+      const data = await this.getXquik(XQUIK_USER_SEARCH_PATH, {
+        q: username.replace(/^@/, ""),
+        limit: "1",
+      });
+      const users = this.readList(data, ["users", "data", "items", "results"]);
+      const user = users[0] ? this.normalizeXquikUser(users[0]) : undefined;
+      if (!user || !user.id) {
+        throw new Error(`User @${username.replace(/^@/, "")} not found.`);
+      }
+      return user;
+    }
+
     const data = (await this.get(`/users/by/username/${username}`, {
       "user.fields": "description,public_metrics",
     })) as { data: UserData };
@@ -302,13 +502,14 @@ export class TwitterClient {
   async unlikeTweet(tweetId: string): Promise<boolean> {
     const me = await this.getMe();
     const url = `${API_BASE}/users/${me.id}/likes/${tweetId}`;
+    const creds = this.ensureTwitterCredentials();
     const oauthHeader = buildOAuth1Header(
       "DELETE",
       url,
-      this.creds.apiKey,
-      this.creds.apiSecret,
-      this.creds.accessToken,
-      this.creds.accessTokenSecret,
+      creds.apiKey,
+      creds.apiSecret,
+      creds.accessToken,
+      creds.accessTokenSecret,
     );
 
     const res = await fetch(url, {
@@ -358,13 +559,14 @@ export class TwitterClient {
     if (params.url !== undefined) formParams.url = params.url;
     if (params.location !== undefined) formParams.location = params.location;
 
+    const creds = this.ensureTwitterCredentials();
     const oauthHeader = buildOAuth1Header(
       "POST",
       apiUrl,
-      this.creds.apiKey,
-      this.creds.apiSecret,
-      this.creds.accessToken,
-      this.creds.accessTokenSecret,
+      creds.apiKey,
+      creds.apiSecret,
+      creds.accessToken,
+      creds.accessTokenSecret,
       formParams,
     );
 

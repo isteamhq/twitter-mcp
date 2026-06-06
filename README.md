@@ -67,6 +67,35 @@ Add to your MCP config (`.mcp.json` for Claude Code, or Claude Desktop settings)
 | `TWITTER_API_SECRET` | Yes | Twitter API secret (consumer secret) |
 | `TWITTER_ACCESS_TOKEN` | Yes | OAuth 1.0a access token |
 | `TWITTER_ACCESS_TOKEN_SECRET` | Yes | OAuth 1.0a access token secret |
+| `XQUIK_API_KEY` or `HERMES_TWEET_API_KEY` | No | Optional Xquik/Hermes Tweet key for read-only search and user tweet tools |
+| `XQUIK_BASE_URL` | No | Optional Xquik-compatible API base URL |
+
+### Optional Xquik/Hermes Tweet read backend
+
+Set `XQUIK_API_KEY` or `HERMES_TWEET_API_KEY` to route `search_tweets`,
+`get_user`, and `get_user_tweets` through Xquik/Hermes Tweet. This keeps write
+tools on the existing Twitter OAuth path and is useful when an agent only needs
+read/search tools or when recent-search access is rate-limited.
+
+Read-only MCP config:
+
+```json
+{
+  "mcpServers": {
+    "twitter": {
+      "command": "npx",
+      "args": ["-y", "@isteam/twitter-mcp"],
+      "env": {
+        "XQUIK_API_KEY": "your-xquik-api-key"
+      }
+    }
+  }
+}
+```
+
+For full read/write usage, keep the Twitter OAuth variables configured. If both
+Twitter OAuth and Xquik are configured, supported read tools use Xquik and write
+tools use Twitter OAuth.
 
 ### Getting your credentials
 
