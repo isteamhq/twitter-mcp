@@ -295,7 +295,7 @@ export class TwitterClient {
 
   private async searchXquikTweets(query: string, maxResults = 10, nextToken?: string): Promise<SearchResult> {
     const params: Record<string, string> = {
-      query,
+      q: query,
       limit: Math.min(Math.max(maxResults, 1), 100).toString(),
     };
     if (nextToken) params.cursor = nextToken;
@@ -472,7 +472,7 @@ export class TwitterClient {
   async getUserByUsername(username: string): Promise<UserData> {
     if (this.xquik) {
       const data = await this.getXquik(XQUIK_USER_SEARCH_PATH, {
-        query: username.replace(/^@/, ""),
+        q: username.replace(/^@/, ""),
         limit: "1",
       });
       const users = this.readList(data, ["users", "data", "items", "results"]);
